@@ -160,6 +160,16 @@ class FastbootProtocol(object):
 
             if header == b'INFO':
                 info_cb(FastbootMessage(remaining, header))
+            elif header[:2] == b'SN':
+                # UNISOC/Spreadtrum devices send a non-standard response.
+                # The full packet is: 'SN' + <hex_token>\n
+                # e.g. b'SN00000000000000000000000000\n\x00...'
+                # We reconstruct the full content (header + remaining),
+                # strip nulls/newlines, and pass as an INFO-style message.
+                full_payload = (header + remaining).rstrip(b'\x00\n\r')
+                # The token starts at byte 2 (after 'SN')
+                token_bytes = full_payload[2:]
+                info_cb(FastbootMessage(token_bytes, b'SN'))
             elif header in self.FINAL_HEADERS:
                 if header != expected_header:
                     raise FastbootStateMismatch(
