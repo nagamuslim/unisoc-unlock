@@ -124,6 +124,77 @@ class BootloaderLock(BootloaderCmd):
         self.dev.Close()
 
 
+class BootloaderFastboot:
+    """Generic passthrough: unisoc-unlock fastboot <Method> [args...]
+
+    Calls the named method on FastbootCommands directly (case-insensitive),
+    forwarding any extra CLI arguments as positional string args. You still
+    need to call the method whose signature matches what you're doing:
+      Boot            -- no file arg; only boots what a prior Download() sent
+                          in the same session.
+      BootFromFile    -- takes a file path; downloads and boots in one call.
+
+    Examples:
+      unisoc-unlock fastboot BootFromFile recovery.img
+      unisoc-unlock fastboot Getvar all
+      unisoc-unlock fastboot Oem device-info
+    """
+
+    # Excluded from passthrough: internal/session-management methods that
+    # don't make sense as a bare one-off call.
+    _BLOCKED = {'close', 'connectdevice', 'devices', 'usb_handle'}
+
+    def __init__(self, method_name, method_args):
+        self.method_name = method_name
+        self.method_args = method_args
+
+    def __call__(self):
+        real_name = None
+        for name in dir(fastboot.FastbootCommands):
+            if name.lower() == self.method_name.lower() and not name.startswith('_'):
+                real_name = name
+                break
+
+        if real_name is None or real_name.lower() in self._BLOCKED:
+            available = sorted(
+                n for n in dir(fastboot.FastbootCommands)
+                if not n.startswith('_') and n.lower() not in self._BLOCKED
+            )
+            print(f'Unknown or unavailable fastboot method: {self.method_name}', file=sys.stderr)
+            print(f'Available: {", ".join(available)}', file=sys.stderr)
+            sys.exit(1)
+
+        self.dev = fastboot.FastbootCommands()
+        try:
+            self.dev.ConnectDevice()
+        except usb_exceptions.DeviceNotFoundError as e:
+            print('No device found: {}'.format(e), file=sys.stderr)
+            sys.exit(1)
+        except usb_exceptions.CommonUsbError as e:
+            print('Could not connect to device: {}'.format(e), file=sys.stderr)
+            sys.exit(1)
+
+        method = getattr(self.dev, real_name)
+        print(f'Calling {real_name}({", ".join(self.method_args)})')
+        try:
+            result = method(*self.method_args)
+        except TypeError as e:
+            print(f'Argument mismatch calling {real_name}: {e}', file=sys.stderr)
+            print('Check the method signature in fastboot.py -- the number/type '
+                  'of arguments you passed may not match.', file=sys.stderr)
+            self.dev.Close()
+            sys.exit(1)
+        except Exception as e:
+            print(f'Error calling {real_name}: {e}', file=sys.stderr)
+            self.dev.Close()
+            sys.exit(1)
+
+        if result is not None:
+            print(f'Result: {result}')
+
+        self.dev.Close()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Lock/Unlock tool for Spreadtrum/Unisoc bootloader'
@@ -131,7 +202,11 @@ def main():
     parser.add_argument('command',
                         type=str,
                         nargs='?',
-                        help='Command (lock|unlock), default=unlock'
+                        help='Command (lock|unlock|fastboot), default=unlock'
+                        )
+    parser.add_argument('fastboot_args',
+                        nargs='*',
+                        help='For "fastboot": <Method> [method args...]'
                         )
     parser.add_argument('--version',
                         action='version',
@@ -145,6 +220,12 @@ def main():
         cmd = BootloaderLock()
     elif args.command in ['unlock', None]:
         cmd = BootloaderUnlock()
+    elif args.command == 'fastboot':
+        if not args.fastboot_args:
+            print('Usage: unisoc-unlock fastboot <Method> [args...]', file=sys.stderr)
+            print('e.g.:  unisoc-unlock fastboot BootFromFile recovery.img', file=sys.stderr)
+            sys.exit(1)
+        cmd = BootloaderFastboot(args.fastboot_args[0], args.fastboot_args[1:])
     else:
         print(f'Unknown command {args.command}', file=sys.stderr)
         sys.exit(1)

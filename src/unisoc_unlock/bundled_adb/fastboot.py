@@ -406,3 +406,30 @@ class FastbootCommands(object):
     def RebootBootloader(self, timeout_ms=None):
         """Reboots into the bootloader, usually equiv to Reboot('bootloader')."""
         return self._SimpleCommand(b'reboot-bootloader', timeout_ms=timeout_ms)
+
+    def Boot(self, timeout_ms=None, info_cb=DEFAULT_MESSAGE_CALLBACK):
+        """Boots the last downloaded file. Does NOT flash any partition.
+
+        Requires a prior Download() call in the same connected session.
+
+        Args:
+          timeout_ms: Optional timeout in milliseconds to wait for a response.
+          info_cb: See Download. Usually no messages.
+        """
+        return self._SimpleCommand(b'boot', timeout_ms=timeout_ms, info_cb=info_cb)
+
+    def BootFromFile(self, source_file, source_len=0,
+                      info_cb=DEFAULT_MESSAGE_CALLBACK, progress_callback=None):
+        """Downloads a file and boots it directly, without flashing.
+
+        Args:
+          source_file: Filename to download to the device.
+          source_len: Optional length of source_file, uses os.stat if not provided.
+          info_cb: See Download.
+          progress_callback: See Download.
+        """
+        if source_len == 0:
+            source_len = os.stat(source_file).st_size
+        self.Download(source_file, source_len=source_len, info_cb=info_cb,
+                       progress_callback=progress_callback)
+        return self.Boot(info_cb=info_cb)
